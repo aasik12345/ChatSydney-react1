@@ -154,7 +154,7 @@
         </div>
     ));
 
-    const EditDialog = ({isOpen, handleClose, handleSubmit, initialData}) => {
+    const EditDialog = ({isOpen, handleClose, handleSubmit, initialData, selectedKey}) => {
         const [data, setData] = React.useState(initialData || {})
         const [error, setError] = React.useState(null)
 
@@ -196,8 +196,11 @@
 
         const handleSave = () => {
             if (!error) {
-                handleSubmit(data)
-                handleClose()
+                if (data.tag === "[system](#additional_instructions)") {
+                    localStorage.setItem(selectedKey + "Prompt", JSON.stringify([data]));
+                }
+                handleSubmit(data);
+                handleClose();
             }
         }
 
@@ -300,11 +303,11 @@
             return result
         }).join("\n\n")
         if (botType === "Sydney") {
-            if (enc.encode(formatted).length > 10000) {
+            if (enc.encode(formatted).length > 19000) {
                 // Assume the first message is system message
                 const systemMessage = `${messages[0].tag}\n${messages[0].hiddenText ?? messages[0].text}\n\n`
                 const systemMessageTokenCount = enc.encode(systemMessage).length
-                const remainingTokenCountLimit = 10000 - systemMessageTokenCount
+                const remainingTokenCountLimit = 19000 - systemMessageTokenCount
                 let remaining = formatted.slice(systemMessage.length)
                 const remainingTokens = enc.encode(remaining).slice(-remainingTokenCountLimit)
                 remaining = enc.decode(remainingTokens)
@@ -430,7 +433,9 @@
             }
             localStorage.setItem('chatHistory' + selectedKey, JSON.stringify(previousMessages))
             renderMathInElement(document.body, {output: 'mathml'})
-            setContextTokens(enc.encode(formatPreviousMessages(previousMessages)).length)
+            if (!responding) {
+                setContextTokens(enc.encode(formatPreviousMessages(previousMessages)).length)
+            }
         }, [previousMessages])
         const [userInput, setUserInput] = React.useState('')
         const [userInputTokens, setUserInputTokens] = React.useState(0)
@@ -440,6 +445,9 @@
         const [enterMode, setEnterMode] = React.useState('enter')
         const [locale, setLocale] = React.useState('zh-CN')
         const [responding, setResponding] = React.useState(false)
+        React.useEffect(() => {
+            setContextTokens(enc.encode(formatPreviousMessages(previousMessages)).length);
+        }, [responding])
         const [editingMessageIndex, setEditingMessageIndex] = React.useState(null)
         const [isEditDialogOpen, setIsEditDialogOpen] = React.useState(false)
         const [botType, setBotType] = React.useState(localStorage.getItem('botType') || "Sydney")
@@ -483,7 +491,7 @@
             } catch (error) {
                 alert(error)
             }
-            setResponding(false)
+            setResponding(false);
             setIimgid("");
         }
 
@@ -580,23 +588,32 @@
                     } else if (response.type === 2) {
                         try {
                             const messages = response.item.messages;
+                            let isDraw = false;
                             // Image Generate support
-                            if (messages.length >= 3 && messages[2]?.contentType === "IMAGE"){
-                                const imgLinks = [...messages[1].adaptiveCards[0].body[0].text.matchAll(/(?<=\()https:\/\/.*?(?=\))/g)];
-                                let align_image_text = "";
-                                for (let i = 0; i < imgLinks.length; i++) {
-                                    align_image_text += `[![image${i}](${imgLinks[i]})](${imgLinks[i]})`
-                                    if (i % 2 === 1 && i + 1 !== imgLinks.length) {
-                                        align_image_text += '\n';
-                                    }
+                            messages.forEach((item) => {
+                                if (item?.contentType === "IMAGE") {
+                                    messages.forEach((item) => {
+                                        if (item?.adaptiveCards) {
+                                            const imgLinks = [...item.adaptiveCards[0].body[0].text.matchAll(/(?<=\()https:\/\/.*?(?=\))/g)];
+                                            let align_image_text = "";
+                                            for (let i = 0; i < imgLinks.length; i++) {
+                                                align_image_text += `[![image${i}](${imgLinks[i]})](${imgLinks[i]})`
+                                                if (i % 2 === 1 && i + 1 !== imgLinks.length) {
+                                                    align_image_text += '\n';
+                                                }
+                                            }
+                                            appendMessage({
+                                                tag: '[assistant](#message)',
+                                                text: align_image_text,
+                                                hiddenText: item.text !== item.adaptiveCards[0].body[0].text ? item.text : null,
+                                                suggestions: acceptSuggestions ? item.suggestedResponses?.map(res => res.text) : []
+                                            })
+                                            isDraw = true;
+                                        }
+                                    });
                                 }
-                                appendMessage({
-                                    tag: '[assistant](#message)',
-                                    text: align_image_text,
-                                    hiddenText: messages[1].text !== messages[1].adaptiveCards[0].body[0].text ? messages[1].text : null,
-                                    suggestions: acceptSuggestions ? messages[1].suggestedResponses?.map(res => res.text) : []
-                                })
-                            } else if (messages.length >= 2 && messages[1].contentOrigin === 'Apology') {
+                            });
+                            if (!isDraw && messages.length >= 2 && messages[1].contentOrigin === 'Apology') {
                                 if (messages.length >= 3 && messages[2].contentOrigin === "OffensiveImageClassifier") {
                                     reject("Disengaged by Offensive Image Filter");
                                 } else {
@@ -708,6 +725,8 @@
                     const savedMessages = localStorage.getItem("chatHistory" + selectedKey);
                     localStorage.removeItem("chatHistory" + selectedKey);
                     localStorage.setItem("chatHistory" + renamedKey, savedMessages);
+                    localStorage.setItem(renamedKey + "Prompt", localStorage.getItem(selectedKey + "Prompt"));
+                    localStorage.removeItem(selectedKey + "Prompt")
                     setSelectedKey(renamedKey);
                 }
             }
@@ -716,6 +735,7 @@
         const deleteKey = () => {
             if (selectedKey) {
                 localStorage.removeItem("chatHistory" + selectedKey);
+                localStorage.removeItem(selectedKey + "Prompt");
                 const remainingKeys = Object.keys(localStorage).filter(key => key.startsWith('chatHistory')).map(key => key.replace('chatHistory', ''));
                 setSelectedKey(remainingKeys[0] || '');
             }
@@ -752,7 +772,7 @@
                         <button
                             className="button"
                             disabled={responding}
-                            onClick={() => setPreviousMessages(defaultMessages)}
+                            onClick={() => setPreviousMessages(JSON.parse(localStorage.getItem(selectedKey + "Prompt")) ?? defaultMessages)}
                         >
                             Clear
                         </button>
@@ -890,6 +910,7 @@
                     handleClose={handleEditDialogClose}
                     handleSubmit={handleEditDialogSubmit}
                     initialData={editingMessageIndex !== null ? previousMessages[editingMessageIndex] : null}
+                    selectedKey={selectedKey}
                 />
             </div>
         )
